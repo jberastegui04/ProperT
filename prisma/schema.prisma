@@ -7,10 +7,22 @@ datasource db {
   provider = "postgresql"
 }
 
+enum UserRole {
+  MANAGER
+  TENANT
+  TECHNICIAN
+}
+
+enum PropertyType {
+  MULTI_FAMILY
+  SINGLE_FAMILY
+}
+
 enum UnitStatus {
   VACANT
   OCCUPIED
   MAINTENANCE
+  INACTIVE
 }
 
 enum LeaseStatus {
@@ -20,89 +32,538 @@ enum LeaseStatus {
   TERMINATED
 }
 
+enum InspectionType {
+  MOVE_IN
+  ROUTINE
+  MOVE_OUT
+  MAINTENANCE
+  CUSTOM
+}
+
+enum InspectionStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum ConditionRating {
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+  DAMAGED
+  NOT_APPLICABLE
+}
+
+enum PhotoContext {
+  INSPECTION
+  WORK_ORDER_SUBMISSION
+  REPAIR_BEFORE
+  REPAIR_AFTER
+  DAMAGE
+  GENERAL
+}
+
+enum WorkOrderStatus {
+  SUBMITTED
+  AWAITING_REVIEW
+  APPROVED
+  ASSIGNED
+  SCHEDULED
+  IN_PROGRESS
+  AWAITING_PARTS
+  COMPLETED
+  CLOSED
+  CANCELLED
+}
+
+enum WorkOrderPriority {
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
+}
+
+enum WorkOrderCategory {
+  PLUMBING
+  ELECTRICAL
+  HVAC
+  APPLIANCE
+  STRUCTURAL
+  PEST
+  LOCKS_SAFETY
+  GENERAL
+  OTHER
+}
+
+enum AiReviewStatus {
+  PENDING
+  APPROVED
+  MODIFIED
+  REJECTED
+}
+
+model User {
+  id String @id @default(cuid())
+
+  // Filled in once we connect a real authentication provider.
+  authProviderId String? @unique
+
+  email     String   @unique
+  firstName String
+  lastName  String
+  phone     String?
+  role      UserRole
+
+  isActive Boolean @default(true)
+
+  organizationMemberships OrganizationMembership[]
+
+  tenantProfile     TenantProfile?
+  technicianProfile TechnicianProfile?
+
+  createdInspections Inspection[] @relation("InspectionCreatedBy")
+  uploadedPhotos     Photo[]      @relation("PhotoUploadedBy")
+
+  submittedWorkOrders WorkOrder[]        @relation("WorkOrderSubmittedBy")
+  workOrderMessages   WorkOrderMessage[]
+
+  assignmentsCreated WorkOrderAssignment[] @relation("AssignmentCreatedBy")
+
+  triageReviews WorkOrderAiTriage[] @relation("TriageReviewedBy")
+
+  completionApprovals WorkOrderCompletion[] @relation("CompletionApprovedBy")
+
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+}
+
 model Organization {
   id   String @id @default(cuid())
   name String
 
-  properties Property[]
-  tenants    Tenant[]
+  memberships OrganizationMembership[]
+  properties  Property[]
+
+  technicians OrganizationTechnician[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model OrganizationMembership {
+  id String @id @default(cuid())
+
+  organizationId String
+  userId         String
+
+  // Lets us distinguish someone who can manage company-level
+  // settings without creating a fourth user role.
+  isAdmin Boolean @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model TenantProfile {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  leases Lease[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TechnicianProfile {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  companyName  String?
+  primaryTrade String?
+
+  organizations OrganizationTechnician[]
+  assignments   WorkOrderAssignment[]
+  completions   WorkOrderCompletion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrganizationTechnician {
+  id String @id @default(cuid())
+
+  organizationId String
+  technicianId   String
+
+  isActive Boolean @default(true)
+  notes    String?
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   TechnicianProfile @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, technicianId])
+  @@index([technicianId])
 }
 
 model Property {
   id String @id @default(cuid())
 
-  name        String
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name String
+  type PropertyType
+
   addressLine String
   city        String
   state       String
   zipCode     String
 
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
   units Unit[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
 }
 
 model Unit {
   id String @id @default(cuid())
 
-  unitNumber String
-  bedrooms   Int
-  bathrooms  Float
-  squareFeet Int?
-
-  monthlyRent Decimal    @db.Decimal(10, 2)
-  status      UnitStatus @default(VACANT)
-
   propertyId String
   property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
 
-  leases Lease[]
+  // Can be "203", "Unit 415", or "Main Home".
+  unitNumber String
+
+  bedrooms   Int?
+  bathrooms  Float?
+  squareFeet Int?
+
+  // Store currency as cents:
+  // 145000 = $1,450.00
+  marketRentCents Int?
+
+  status UnitStatus @default(VACANT)
+
+  leases      Lease[]
+  inspections Inspection[]
+  workOrders  WorkOrder[]
+  photos      Photo[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([propertyId, unitNumber])
-}
-
-model Tenant {
-  id String @id @default(cuid())
-
-  firstName String
-  lastName  String
-  email     String  @unique
-  phone     String?
-
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  leases Lease[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@index([propertyId])
+  @@index([status])
 }
 
 model Lease {
   id String @id @default(cuid())
 
+  unitId   String
+  tenantId String
+
+  unit   Unit          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  tenant TenantProfile @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   startDate DateTime
   endDate   DateTime
 
-  monthlyRent Decimal     @db.Decimal(10, 2)
-  status      LeaseStatus @default(ACTIVE)
+  monthlyRentCents     Int
+  securityDepositCents Int?
 
-  unitId String
-  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  status LeaseStatus @default(FUTURE)
 
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inspections Inspection[]
+  workOrders  WorkOrder[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([unitId, status])
+  @@index([tenantId])
+}
+
+model Inspection {
+  id String @id @default(cuid())
+
+  unitId      String
+  leaseId     String?
+  createdById String
+
+  unit      Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  lease     Lease? @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  createdBy User   @relation("InspectionCreatedBy", fields: [createdById], references: [id])
+
+  type   InspectionType
+  status InspectionStatus @default(DRAFT)
+
+  notes String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  sections InspectionSection[]
+  photos   Photo[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([unitId, status])
+  @@index([leaseId])
+}
+
+model InspectionSection {
+  id String @id @default(cuid())
+
+  inspectionId String
+  inspection   Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  name      String
+  sortOrder Int
+
+  condition ConditionRating?
+  notes     String?
+
+  completed Boolean @default(false)
+
+  photos Photo[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([inspectionId, sortOrder])
+  @@index([inspectionId])
+}
+
+model Photo {
+  id String @id @default(cuid())
+
+  unitId       String
+  uploadedById String
+
+  unit       Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("PhotoUploadedBy", fields: [uploadedById], references: [id])
+
+  // Later this will point to S3 / Cloudinary / another
+  // object-storage provider.
+  storageKey String
+
+  thumbnailStorageKey String?
+
+  mimeType      String?
+  fileSizeBytes Int?
+  width         Int?
+  height        Int?
+
+  context PhotoContext
+
+  capturedAt DateTime?
+
+  roomLabel String?
+  notes     String?
+
+  // Optional GPS metadata.
+  latitude  Float?
+  longitude Float?
+
+  inspectionId        String?
+  inspectionSectionId String?
+  workOrderId         String?
+  completionId        String?
+
+  inspection        Inspection?          @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  inspectionSection InspectionSection?   @relation(fields: [inspectionSectionId], references: [id], onDelete: SetNull)
+  workOrder         WorkOrder?           @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  completion        WorkOrderCompletion? @relation(fields: [completionId], references: [id], onDelete: SetNull)
+
+  // First version of inspection/photo AI.
+  // We can later split this into a dedicated analysis model.
+  aiLabel       String?
+  aiObservation String?
+  aiConfidence  Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([unitId, createdAt])
+  @@index([inspectionId])
+  @@index([workOrderId])
+}
+
+model WorkOrder {
+  id String @id @default(cuid())
+
+  unitId        String
+  leaseId       String?
+  submittedById String
+
+  unit        Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  lease       Lease? @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  submittedBy User   @relation("WorkOrderSubmittedBy", fields: [submittedById], references: [id])
+
+  // Tenant only needs to provide a description and photos.
+  description String
+
+  // Manager or AI can generate this later.
+  title String?
+
+  status WorkOrderStatus @default(SUBMITTED)
+
+  category WorkOrderCategory?
+  priority WorkOrderPriority?
+
+  permissionToEnter Boolean @default(false)
+
+  // Never shown to tenants or technicians unless we choose otherwise.
+  internalNotes String?
+
+  aiTriage WorkOrderAiTriage?
+
+  assignments WorkOrderAssignment[]
+  messages    WorkOrderMessage[]
+  photos      Photo[]
+
+  completion WorkOrderCompletion?
+
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([unitId, status])
+  @@index([submittedById])
+  @@index([status, priority])
+}
+
+model WorkOrderAiTriage {
+  id String @id @default(cuid())
+
+  workOrderId String    @unique
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  category WorkOrderCategory
+  priority WorkOrderPriority
+
+  summary String
+
+  suggestedTrade    String?
+  possibleCause     String?
+  safetyConcern     String?
+  suggestedNextStep String?
+
+  confidence Float
+
+  reviewStatus AiReviewStatus @default(PENDING)
+
+  reviewedById String?
+  reviewedBy   User?   @relation("TriageReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  reviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reviewStatus])
+}
+
+model WorkOrderAssignment {
+  id String @id @default(cuid())
+
+  workOrderId  String
+  technicianId String
+  assignedById String
+
+  workOrder  WorkOrder         @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  technician TechnicianProfile @relation(fields: [technicianId], references: [id])
+  assignedBy User              @relation("AssignmentCreatedBy", fields: [assignedById], references: [id])
+
+  isActive Boolean @default(true)
+
+  assignedAt  DateTime  @default(now())
+  acceptedAt  DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  @@index([technicianId, isActive])
+  @@index([workOrderId, isActive])
+}
+
+model WorkOrderMessage {
+  id String @id @default(cuid())
+
+  workOrderId String
+  authorId    String
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id])
+
+  body String
+
+  createdAt DateTime @default(now())
+
+  @@index([workOrderId, createdAt])
+}
+
+model WorkOrderCompletion {
+  id String @id @default(cuid())
+
+  workOrderId  String @unique
+  technicianId String
+
+  workOrder  WorkOrder         @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  technician TechnicianProfile @relation(fields: [technicianId], references: [id])
+
+  repairNotes String
+
+  materialsUsed String?
+  laborMinutes  Int?
+
+  submittedAt DateTime @default(now())
+
+  managerApprovedAt   DateTime?
+  managerApprovedById String?
+
+  managerApprovedBy User? @relation("CompletionApprovedBy", fields: [managerApprovedById], references: [id], onDelete: SetNull)
+
+  photos Photo[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id String @id @default(cuid())
+
+  userId      String
+  workOrderId String?
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  title String
+  body  String
+
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
 }
