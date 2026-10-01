@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -10,4 +5,104 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum UnitStatus {
+  VACANT
+  OCCUPIED
+  MAINTENANCE
+}
+
+enum LeaseStatus {
+  ACTIVE
+  FUTURE
+  EXPIRED
+  TERMINATED
+}
+
+model Organization {
+  id   String @id @default(cuid())
+  name String
+
+  properties Property[]
+  tenants    Tenant[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Property {
+  id String @id @default(cuid())
+
+  name        String
+  addressLine String
+  city        String
+  state       String
+  zipCode     String
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  units Unit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Unit {
+  id String @id @default(cuid())
+
+  unitNumber String
+  bedrooms   Int
+  bathrooms  Float
+  squareFeet Int?
+
+  monthlyRent Decimal    @db.Decimal(10, 2)
+  status      UnitStatus @default(VACANT)
+
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  leases Lease[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([propertyId, unitNumber])
+}
+
+model Tenant {
+  id String @id @default(cuid())
+
+  firstName String
+  lastName  String
+  email     String  @unique
+  phone     String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  leases Lease[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Lease {
+  id String @id @default(cuid())
+
+  startDate DateTime
+  endDate   DateTime
+
+  monthlyRent Decimal     @db.Decimal(10, 2)
+  status      LeaseStatus @default(ACTIVE)
+
+  unitId String
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
